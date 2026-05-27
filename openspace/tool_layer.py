@@ -62,6 +62,7 @@ class OpenSpaceConfig:
     # Skill Evolution
     evolution_max_concurrent: int = 3        # Max parallel evolutions per trigger
     execution_analysis_timeout: float = 300.0  # Overall post-task analyzer/evolver bound
+    background_analysis: bool = True  # If True, run analysis async (return result immediately)
     
     # Logging Configuration
     log_level: str = "INFO"
@@ -596,24 +597,28 @@ class OpenSpace:
             if cancelled_exc is None:
                 # Run execution analysis + evolution BEFORE building the return
                 # value, so evolved_skills is populated.
-                try:
-                    await asyncio.wait_for(
-                        self._maybe_analyze_execution(
-                            task_id, recording_dir, result
-                        ),
-                        timeout=self.config.execution_analysis_timeout,
-                    )
-                except asyncio.TimeoutError:
-                    result["analysis_timed_out"] = True
-                    logger.warning(
-                        "Analyzer/evolver exceeded %.1fs bound for task %s; "
-                        "cancelled. Evolved skills (if any) may be incomplete.",
-                        self.config.execution_analysis_timeout,
-                        task_id,
-                    )
+                if self.config.background_analysis:
+                    # Fire-and-forget: return result immediately, analyze in background
+                    asyncio.create_task(self._background_analyze(task_id, recording_dir, result))
+                else:
+                    try:
+                        await asyncio.wait_for(
+                            self._maybe_analyze_execution(
+                                task_id, recording_dir, result
+                            ),
+                            timeout=self.config.execution_analysis_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        result["analysis_timed_out"] = True
+                        logger.warning(
+                            "Analyzer/evolver exceeded %.1fs bound for task %s; "
+                            "cancelled. Evolved skills (if any) may be incomplete.",
+                            self.config.execution_analysis_timeout,
+                            task_id,
+                        )
 
-                # Trigger quality evolution periodically
-                await self._maybe_evolve_quality()
+                    # Trigger quality evolution periodically
+                    await self._maybe_evolve_quality()
 
             final_result = {
                 **result,
@@ -783,6 +788,14 @@ class OpenSpace:
 
         # 3. Main LLM client
         return self._llm_client
+
+    async def _background_analyze(self, task_id: str, recording_dir, result: dict):
+        """Fire-and-forget analysis: scores update in background, result returned immediately."""
+        try:
+            await self._maybe_analyze_execution(task_id, recording_dir, result)
+            await self._maybe_evolve_quality()
+        except Exception as e:
+            logger.warning(f"Background analysis failed for {task_id}: {e}")
 
     async def _maybe_analyze_execution(
         self,

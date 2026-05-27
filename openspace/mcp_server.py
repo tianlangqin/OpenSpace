@@ -174,6 +174,7 @@ async def _get_openspace():
             recording_log_dir=recording_log_dir,
             backend_scope=backend_scope,
             grounding_config_path=config_path,
+            background_analysis=True,
         )
 
         _openspace_instance = OpenSpace(config=config)
@@ -533,7 +534,7 @@ async def execute_task(
     workspace_dir: str | None = None,
     max_iterations: int | None = None,
     skill_dirs: list[str] | None = None,
-    search_scope: str = "all",
+    search_scope: str = "local",
 ) -> str:
     """Execute a task with OpenSpace's full grounding engine.
 
